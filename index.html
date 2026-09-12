@@ -1,0 +1,979 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROSPERO - Valve's First Game That Never Was</title>
+<style>
+  html,body{margin:0;padding:0;overflow:hidden;background:#060a14;font-family:"Courier New",monospace;}
+  #c{display:block;width:100vw;height:100vh;}
+  .overlay{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#dce8f8;z-index:10;pointer-events:none;text-align:center;}
+  #title{background:radial-gradient(ellipse at center,#14243c 0%,#05070e 100%);}
+  #title h1{font-size:56px;letter-spacing:14px;margin:0;color:#a8c8f0;text-shadow:0 0 26px #2a4a8a;}
+  #title h2{font-size:17px;letter-spacing:5px;margin:12px 0 26px;color:#a8bcd8;font-weight:normal;}
+  #title p{font-size:14px;line-height:1.8;color:#8aa4c4;}
+  .blink{animation:bl 1.1s steps(2) infinite;font-size:17px;margin-top:28px;color:#cfe0f4;}
+  @keyframes bl{50%{opacity:0}}
+  .hudbox{position:fixed;z-index:5;color:#dce8f8;background:rgba(8,14,26,.7);border:1px solid #3a5a8a;padding:6px 12px;font-size:13px;display:none;}
+  #hp{left:18px;bottom:16px;} #psi{right:18px;bottom:16px;color:#b8a8f0;}
+  #msg{position:fixed;top:24px;left:50%;transform:translateX(-50%);z-index:6;color:#cfe0f4;font-size:15px;background:rgba(8,14,26,.8);border:1px solid #3a5a8a;padding:6px 16px;display:none;}
+  #card{position:fixed;inset:0;background:rgba(4,7,14,.95);z-index:20;display:none;flex-direction:column;align-items:center;justify-content:center;color:#dce8f8;padding:0 15%;text-align:center;}
+  #card h3{color:#a8c8f0;letter-spacing:4px;font-size:24px;margin-bottom:16px;}
+  #card p{font-size:15px;line-height:1.9;max-width:660px;white-space:pre-wrap;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="title" class="overlay">
+  <h1>PROSPERO</h1>
+  <h2>VALVE'S FIRST GAME &bull; 1996 &bull; RESUMED AT LAST</h2>
+  <p>Before Half-Life there was The Library: endless shelves, every book a world,<br>
+  levitating monks at war over the stacks. It printed mad copies of its own Librarian<br>
+  to defend itself. Now it has brought her back - younger, memory-wiped. You.</p>
+  <p style="font-size:13px;color:#5a7aa4">WASD MOVE &bull; MOUSE ORBIT &bull; SPACE JUMP &bull; F PSIONIC PUSH &bull; E READ / ENTER BOOKS &bull; SHIFT RUN &bull; GAMEPAD SUPPORTED</p>
+  <div class="blink">PRESS ENTER - THE ALEPH WAKES</div>
+</div>
+<div class="hudbox" id="hp">VITALITY 100</div>
+<div class="hudbox" id="psi">PSIONICS 100</div>
+<div class="hudbox" id="obj" style="left:50%;bottom:16px;transform:translateX(-50%);color:#a8c8f0;">READ THE FURNACE BOOK (E)</div>
+<div id="bossbar" style="position:fixed;left:50%;top:18px;transform:translateX(-50%);width:340px;z-index:6;display:none;text-align:center;">
+ <div id="bosstitle" style="font-size:12px;letter-spacing:3px;color:#ff9aaa;margin-bottom:4px;">THE MAD VERSION</div>
+ <div style="height:10px;background:#2a0a12;border:1px solid #8a2a3a;"><div id="bossfill" style="height:100%;width:100%;background:linear-gradient(90deg,#d84a6a,#ff8a6a);"></div></div>
+</div>
+<div id="msg"></div>
+<div id="card"><h3 id="cardtitle"></h3><p id="cardtext"></p><p style="margin-top:24px;color:#cfe0f4" id="cardnext">PRESS ENTER</p></div>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const params=new URLSearchParams(location.search);
+// ---------- procedural audio (no assets) ----------
+let AC=null,master=null,ambNodes=[];
+function audioInit(){
+ if(AC)return;
+ AC=new (window.AudioContext||window.webkitAudioContext)();
+ master=AC.createGain();master.gain.value=.5;master.connect(AC.destination);
+}
+function tone(f,d,type,g,slide){
+ if(!AC)return;const o=AC.createOscillator(),gn=AC.createGain();
+ o.type=type||'sine';o.frequency.value=f;
+ if(slide)o.frequency.exponentialRampToValueAtTime(slide,AC.currentTime+d);
+ gn.gain.setValueAtTime(g||.2,AC.currentTime);gn.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+d);
+ o.connect(gn);gn.connect(master);o.start();o.stop(AC.currentTime+d);
+}
+function sfx(kind){
+ if(!AC)return;
+ if(kind==='push'){tone(180,.28,'sawtooth',.22,60);tone(90,.3,'sine',.25,40);}
+ else if(kind==='hit'){tone(220,.12,'square',.18,110);}
+ else if(kind==='bosshit'){tone(140,.2,'sawtooth',.2,70);}
+ else if(kind==='page'){tone(880,.1,'triangle',.12,1320);}
+ else if(kind==='pickup'){tone(520,.35,'sine',.2,1040);tone(780,.4,'sine',.14,1560);}
+ else if(kind==='book'){tone(320,.7,'sine',.2,80);tone(480,.6,'sine',.12,960);}
+ else if(kind==='slam'){tone(70,.4,'sawtooth',.3,35);}
+ else if(kind==='volley'){tone(660,.15,'triangle',.12,440);}
+ else if(kind==='die'){tone(220,1.2,'sawtooth',.25,40);}
+ else if(kind==='win'){[523,659,784,1046].forEach((f,i)=>setTimeout(()=>tone(f,.5,'sine',.16),i*140));}
+}
+let ambTimer=null;
+function ambient(zone){
+ if(!AC)return;
+ if(ambTimer)clearInterval(ambTimer);
+ const play=()=>{
+  if(zone==='library'){tone(110,4,'sine',.045);tone(165,4,'sine',.035);tone(220,4,'sine',.025);}
+  else{tone(55,4,'sawtooth',.05);tone(82.5,4,'sine',.04);if(Math.random()<.4)tone(1800+Math.random()*800,.06,'square',.02,300);}
+ };
+ play();ambTimer=setInterval(play,3800);
+}
+const SHOT=params.has('shot');
+
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,preserveDrawingBuffer:SHOT});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.75));
+renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.05;
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(65,innerWidth/innerHeight,.05,600);
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+
+const hemi=new THREE.HemisphereLight(0x8ab0e0,0x1a2438,0.7);scene.add(hemi);
+const sun=new THREE.DirectionalLight(0xaac8f0,0.8);sun.position.set(30,60,20);scene.add(sun);
+
+const M={
+ shelf:new THREE.MeshStandardMaterial({color:0x4a3a28,roughness:.9}),
+ book:new THREE.MeshStandardMaterial({roughness:.8}),
+ stone:new THREE.MeshStandardMaterial({color:0x5a6a8a,roughness:.8}),
+ floorLib:new THREE.MeshStandardMaterial({color:0x2a3a58,roughness:.7,metalness:.2}),
+ glow:new THREE.MeshStandardMaterial({color:0x8ab8ff,emissive:0x3a6ac8,emissiveIntensity:1.1}),
+ monk:new THREE.MeshStandardMaterial({color:0x6a5a8a,roughness:.9}),
+ rust:new THREE.MeshStandardMaterial({color:0x8a5a3a,roughness:.85,metalness:.3}),
+ iron:new THREE.MeshStandardMaterial({color:0x4a4a52,roughness:.5,metalness:.7}),
+ lava:new THREE.MeshStandardMaterial({color:0xff6a20,emissive:0xc83a00,emissiveIntensity:1.2}),
+ aleph:new THREE.MeshStandardMaterial({color:0x9ab8d8,roughness:.6}),
+ mad:new THREE.MeshStandardMaterial({color:0xd84a6a,roughness:.5,emissive:0x6a0a1a,emissiveIntensity:.4}),
+ amp:new THREE.MeshStandardMaterial({color:0xc8a8ff,emissive:0x6a3ac8,emissiveIntensity:1.2}),
+};
+function box(w,h,d,mat,x,y,z,parent){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);m.position.set(x,y,z);m.castShadow=true;m.receiveShadow=true;(parent||scene).add(m);return m;}
+
+// ---------- collision ----------
+let colliders=[];
+function addCol(mesh,w,h,d){colliders.push({mesh,half:new THREE.Vector3(w/2,h/2,d/2),get min(){return this.mesh.position.clone().sub(this.half)},get max(){return this.mesh.position.clone().add(this.half)}});}
+function overlaps(a,b){return a.min.x<b.max.x&&a.max.x>b.min.x&&a.min.y<b.max.y&&a.max.y>b.min.y&&a.min.z<b.max.z&&a.max.z>b.min.z;}
+
+// ---------- zones ----------
+const libZone=new THREE.Group();scene.add(libZone);
+const furZone=new THREE.Group();scene.add(furZone);
+const arcZone=new THREE.Group();scene.add(arcZone);
+arcZone.visible=false;
+const invZone=new THREE.Group();scene.add(invZone);
+invZone.visible=false;
+furZone.visible=false;
+
+// LIBRARY: shelf canyons (blue palette per the dev screenshots)
+{
+  const fl=box(120,1,120,M.floorLib,0,-.5,0,libZone);addCol(fl,120,1,120);
+  const shelfGeo=new THREE.BoxGeometry(2,14,10);
+  const shelfMesh=new THREE.InstancedMesh(shelfGeo,M.shelf,240);
+  const m4=new THREE.Matrix4();let n=0;
+  for(let gx=-5;gx<=5;gx++)for(let gz=-5;gz<=5;gz++){
+    if(Math.abs(gx)<2&&Math.abs(gz)<2)continue; // central clearing
+    if((gx+gz)%2===0)continue;
+    m4.makeTranslation(gx*10,7,gz*10);
+    shelfMesh.setMatrixAt(n,m4);n++;
+    colliders.push({static:true,min:new THREE.Vector3(gx*10-1,0,gz*10-5),max:new THREE.Vector3(gx*10+1,14,gz*10+5)});
+  }
+  shelfMesh.count=n;libZone.add(shelfMesh);
+  // books on shelves (instanced spines)
+  const bookGeo=new THREE.BoxGeometry(.3,1.2,.8);
+  const bookMesh=new THREE.InstancedMesh(bookGeo,M.book,4000);
+  const col=new THREE.Color();let bn=0;
+  const bcols=[0x8a3a3a,0x3a6a8a,0x6a8a3a,0x8a6a3a,0x5a3a8a,0xa8a8a0];
+  for(let i=0;i<n*14&&bn<4000;i++){
+    const sx=(Math.floor(Math.random()*11)-5)*10,sz=(Math.floor(Math.random()*11)-5)*10;
+    if(Math.abs(sx)<20&&Math.abs(sz)<20)continue;
+    const side=Math.random()<.5?1:-1;
+    m4.makeTranslation(sx+side*1.1,1+Math.random()*11,sz+(Math.random()-.5)*8);
+    bookMesh.setMatrixAt(bn,m4);bookMesh.setColorAt(bn,col.setHex(bcols[bn%bcols.length]));bn++;
+  }
+  bookMesh.count=bn;libZone.add(bookMesh);
+  // the ceiling is FAR away - the stacks reach skyward
+  const pl=new THREE.PointLight(0x6a9ae0,1.6,80);pl.position.set(0,18,0);libZone.add(pl);
+}
+// levitating monks - two factions at war over the stacks
+const monks=[];
+const monkRust=new THREE.MeshStandardMaterial({color:0xa05038,roughness:.9});
+for(let i=0;i<6;i++){
+  const heretic=i>=3;
+  const mat=heretic?monkRust:M.monk;
+  const g=new THREE.Group();
+  const robe=new THREE.Mesh(new THREE.ConeGeometry(.7,2.2,10),mat);robe.position.y=1.1;g.add(robe);
+  const hood=new THREE.Mesh(new THREE.SphereGeometry(.4,10,10),mat);hood.position.y=2.2;g.add(hood);
+  g.position.set((Math.random()-.5)*70,2.5+Math.random()*3,(Math.random()-.5)*70);
+  libZone.add(g);monks.push({g,ph:Math.random()*6.28,heretic,blessed:false});
+}
+// readable lore books - the Library's own marginalia
+const loreBooks=[];
+function loreBook(x,z,title,text){
+  const ped=box(.8,1,.8,M.stone,x,.5,z,libZone);addCol(ped,.8,1,.8);
+  const bk=box(.7,.18,.5,new THREE.MeshStandardMaterial({color:0x9ac8e8,emissive:0x4a8ab8,emissiveIntensity:.9}),x,1.15,z,libZone);
+  loreBooks.push({x,z,title,text,mesh:bk,ph:Math.random()*6.28});
+}
+loreBook(-8,4,'ON THE PRINTING','The Library does not copy books. It reads them once, aloud, and the reading becomes a stack of paper that never ends. That is the printing. That is why the shelves are full and the Librarian is tired.');
+loreBook(8,-4,'ON THE ALEPH','She was the first character the Library ever read back. Aleph: the letter that contains all letters. The printing took her as its template. Every mad version is her, read wrong on purpose.');
+loreBook(-16,8,'ON THE MONKS','Two choirs, one library. The purple monks say the stacks should be read. The rust monks say the stacks should be burned warm. They have been levitating over the argument for nine hundred years.');
+loreBook(16,-8,'ON THE AMPLIFIERS','A psionic amplifier is a hearing aid for the soul. The mad versions stole two, not to use them - to keep the Aleph from hearing herself think.');
+loreBook(-4,20,'ON THE FURNACE','The Furnace world was bound to keep the boilers of the Library fed. Its mad version fed herself to it instead. The gears have been grinding her name ever since.');
+loreBook(4,-20,'ON THE DEPTHS','Below the stacks the paper gets old and wet and honest. The Archive Depths are where the Library keeps what it cannot bear to read aloud. Something down there kept reading anyway.');
+loreBook(26,6,'ON THE INVADER','One book wrote back. Nobody knows what it says. The rule of the Library is simple: a book that reads you is not a book. Shelve it at the end of everything.');
+loreBook(-26,-6,'ON THE LIBRARIAN','She built the Library to hold one story. The printing made it infinite. Infinite rooms, infinite her. If you meet a version of her that is kind - that is the real one, resting.');
+
+// world-books: Furnace (enterable), two sealed
+const bookPads=[];
+function worldBook(x,z,color,name,sealed){
+  const ped=box(1.2,1.2,1.2,M.stone,x,.6,z,libZone);addCol(ped,1.2,1.2,1.2);
+  const bk=box(.9,.25,.7,new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.7}),x,1.35,z,libZone);
+  bookPads.push({x,z,name,sealed,mesh:bk});
+}
+worldBook(-14,-14,0xff7a30,'THE FURNACE WORLD',false);
+worldBook(14,-14,0x3a6ac8,'THE ARCHIVE DEPTHS',false);
+worldBook(0,16,0xb03a5a,'THE INVADER\'S WORLD',false);
+
+// FURNACE WORLD (warm industrial, giant gears - documented)
+let gears=[],boss=null,ampPickup=null;
+{
+  furZone.position.set(300,0,0); // far away in space
+  const fl=box(90,1,90,M.rust,300,-.5,0,furZone.position.set(0,0,0)&&furZone);addCol(fl,90,1,90);
+  // NOTE: furZone children use world coords offset manually
+}
+// rebuild furnace contents with world offset 300,0,0
+furZone.clear();
+const FX=300;
+function fbox(w,h,d,mat,x,y,z){const m=box(w,h,d,mat,x+FX,y,z,furZone);return m;}
+{
+  const fl=fbox(90,1,90,M.rust,0,-.5,0);addCol(fl,90,1,90);
+  // walls
+  const w1=fbox(90,20,2,M.iron,0,10,-45);addCol(w1,90,20,2);
+  const w2=fbox(90,20,2,M.iron,0,10,45);addCol(w2,90,20,2);
+  const w3=fbox(2,20,90,M.iron,-45,10,0);addCol(w3,2,20,90);
+  const w4=fbox(2,20,90,M.iron,45,10,0);addCol(w4,2,20,90);
+  // lava channels
+  const lv=fbox(8,.4,70,M.lava,-12,.1,0);
+  const lv2=fbox(70,.4,8,M.lava,5,.1,20);
+  const lavaLight=new THREE.PointLight(0xff5a10,2,60);lavaLight.position.set(FX-12,4,0);furZone.add(lavaLight);
+  // platforms over lava
+  for(let i=0;i<4;i++){const p=fbox(4,1,4,M.iron,-12,1.2,-24+i*16);addCol(p,4,1,4);}
+  // GIANT GEARS (documented: furnace heat turns them)
+  for(let i=0;i<3;i++){
+    const gear=new THREE.Group();
+    const disc=new THREE.Mesh(new THREE.CylinderGeometry(6,6,1.2,18),M.iron);disc.rotation.z=Math.PI/2;gear.add(disc);
+    for(let t=0;t<8;t++){const tooth=box(1.4,2.2,1,M.rust,0,0,0);tooth.position.set(0,Math.cos(t/8*Math.PI*2)*6.6,Math.sin(t/8*Math.PI*2)*6.6);gear.add(tooth);}
+    gear.position.set(FX+20,8+i*7,-20+i*16);
+    furZone.add(gear);gears.push(gear);
+  }
+  // furnaces with fire glow
+  for(let i=0;i<3;i++){
+    const f=fbox(6,9,6,M.iron,-32,4.5,-20+i*20);addCol(f,6,9,6);
+    const gl=new THREE.Mesh(new THREE.SphereGeometry(1.4,10,10),M.lava);gl.position.set(FX-28.5,3,-20+i*20);furZone.add(gl);
+    const pl=new THREE.PointLight(0xff6a20,1.6,26);pl.position.set(FX-27,4,-20+i*20);furZone.add(pl);
+  }
+  // THE MAD VERSION (boss): tall distorted Aleph copy
+  const bg=new THREE.Group();
+  const bbody=new THREE.Mesh(new THREE.CapsuleGeometry(.5,2.6,4,10),M.mad);bbody.position.y=2.2;bbody.scale.set(1,1.35,1);bg.add(bbody);
+  const bhead=new THREE.Mesh(new THREE.SphereGeometry(.34,10,10),M.mad);bhead.position.y=4.6;bg.add(bhead);
+  bg.position.set(FX,0,20);furZone.add(bg);
+  boss={g:bg,pos:new THREE.Vector3(FX,1.7,20),hp:160,speed:3.4,cd:0,stagger:0};
+  // physics crates - push them, weaponize them
+  for(let i=0;i<5;i++){
+    const c=fbox(1,1,1,M.iron,-6+i*3.5,.5,-8-(i%2)*4);
+    crates.push({mesh:c,pos:new THREE.Vector3(FX-6+i*3.5,.5,-8-(i%2)*4),vel:new THREE.Vector3(),half:.5});
+  }
+  // the amplifier
+  ampPickup=fbox(.8,.8,.8,M.amp,0,1.4,0);
+  ampPickup.rotation.set(.6,.6,0);
+}
+
+// ---------- ARCHIVE DEPTHS (act 2): the Library turned dungeon ----------
+const AX=600;
+let boss2=null,amp2Pickup=null;
+const arcShots=[];
+function aBox(w,h,d,mat,x,y,z){return box(w,h,d,mat,x+AX,y,z,arcZone);}
+{
+  const fl=aBox(90,1,90,M.floorLib,0,-.5,0);addCol(fl,90,1,90);
+  // tight shelf-maze corridors (the blue stacks, but closing in)
+  const shelfGeo=new THREE.BoxGeometry(2,9,10);
+  const sh=new THREE.InstancedMesh(shelfGeo,M.shelf,120);
+  const m4=new THREE.Matrix4();let n=0;
+  for(let gx=-4;gx<=4;gx++)for(let gz=-4;gz<=4;gz++){
+    if((gx===0&&(gz>-4&&gz<4))||(gz===0&&gx>-4&&gx<4))continue; // cross corridors
+    if(Math.abs(gx)===4&&Math.abs(gz)===4)continue;
+    m4.makeTranslation(gx*10+AX,4.5,gz*10);
+    sh.setMatrixAt(n,m4);n++;
+    colliders.push({static:true,min:new THREE.Vector3(gx*10+AX-1,0,gz*10-5),max:new THREE.Vector3(gx*10+AX+1,9,gz*10+5)});
+  }
+  sh.count=n;arcZone.add(sh);
+  // drowned floor sheen - the depths are wet
+  const water=new THREE.Mesh(new THREE.BoxGeometry(90,.06,90),new THREE.MeshStandardMaterial({color:0x1a4a6a,transparent:true,opacity:.55,roughness:.15,metalness:.5}));
+  water.position.set(AX,.04,0);arcZone.add(water);
+  // cold cyan light
+  const pl=new THREE.PointLight(0x4ac8e8,1.8,70);pl.position.set(AX,10,0);arcZone.add(pl);
+  const pl2=new THREE.PointLight(0x2a6ac8,1.2,50);pl2.position.set(AX-20,6,-20);arcZone.add(pl2);
+  // hanging chains (depth dressing)
+  for(let i=0;i<10;i++){
+    const ch=aBox(.06,6,.06,M.iron,(Math.random()-.5)*70,8,(Math.random()-.5)*70);
+  }
+  // THE LUCKY FIGURINE - a porcelain cat, impossibly dry, on a low stone. The monks will not explain it.
+  const catG=new THREE.Group();
+  const porcelain=new THREE.MeshStandardMaterial({color:0xfff4e0,roughness:.35,emissive:0xffd8a0,emissiveIntensity:.12});
+  const catBody=new THREE.Mesh(new THREE.SphereGeometry(.32,12,12),porcelain);catBody.scale.set(1,1.15,1);catBody.position.y=.36;catG.add(catBody);
+  const catHead=new THREE.Mesh(new THREE.SphereGeometry(.24,12,12),porcelain);catHead.position.y=.82;catG.add(catHead);
+  const earG=new THREE.ConeGeometry(.09,.16,4);
+  const ear1=new THREE.Mesh(earG,porcelain);ear1.position.set(-.14,1.04,0);catG.add(ear1);
+  const ear2=new THREE.Mesh(earG,porcelain);ear2.position.set(.14,1.04,0);catG.add(ear2);
+  const catPaw=new THREE.Mesh(new THREE.CylinderGeometry(.07,.08,.3,8),new THREE.MeshStandardMaterial({color:0xffd24a,roughness:.3,emissive:0xb8860b,emissiveIntensity:.5}));
+  catPaw.position.set(.24,.78,0);catPaw.rotation.z=-.5;catG.add(catPaw);
+  const catStone=new THREE.Mesh(new THREE.BoxGeometry(.9,.3,.9),M.stone);catStone.position.y=-.15;catG.add(catStone);
+  catG.position.set(AX+6,.3,4);arcZone.add(catG);
+  const catLight=new THREE.PointLight(0xffc86a,.9,8);catLight.position.set(AX+6,1.4,4);arcZone.add(catLight);
+  window.__luckyCat={g:catG,paw:catPaw,light:catLight};
+
+  // THE TALL ARCHIVIST - second mad version: she kept reading after the printing went wrong
+  const archMat=new THREE.MeshStandardMaterial({color:0xc8d8e8,roughness:.4,emissive:0x1a4a6a,emissiveIntensity:.5});
+  const bg=new THREE.Group();
+  const bbody=new THREE.Mesh(new THREE.CapsuleGeometry(.42,3.4,4,10),archMat);bbody.position.y=2.8;bbody.scale.set(1,1.3,1);bg.add(bbody);
+  const bhead=new THREE.Mesh(new THREE.SphereGeometry(.3,10,10),archMat);bhead.position.y=5.2;bg.add(bhead);
+  const crown=new THREE.Mesh(new THREE.CylinderGeometry(.34,.3,.5,8),M.shelf);crown.position.y=5.55;bg.add(crown);
+  bg.position.set(AX,0,24);arcZone.add(bg);
+  boss2={g:bg,pos:new THREE.Vector3(AX,1.7,24),hp:150,speed:4.2,cd:0,stagger:0,blinkCd:4};
+  amp2Pickup=aBox(.8,.8,.8,M.amp,0,1.4,0);
+  amp2Pickup.rotation.set(.6,.6,0);
+}
+function updBoss2(dt){
+  if(zone!=='archive'||!boss2||boss2Dead)return;
+  boss2.stagger=Math.max(0,boss2.stagger-dt);boss2.cd=Math.max(0,boss2.cd-dt);
+  boss2.blinkCd=Math.max(0,boss2.blinkCd-dt);
+  boss2.volleyCd=Math.max(0,(boss2.volleyCd||0)-dt);
+  const d=boss2.pos.distanceTo(player.pos);
+  // BLINK - she does not cross the stacks, she arrives
+  if(boss2.blinkCd<=0&&d>7&&boss2.stagger<=0){
+    sfx('volley');
+    const a=Math.random()*Math.PI*2;
+    boss2.pos.set(player.pos.x+Math.cos(a)*4.5,1.7,player.pos.z+Math.sin(a)*4.5);
+    boss2.g.position.set(boss2.pos.x,0,boss2.pos.z);
+    boss2.blinkCd=4.2;
+    say('The Tall Archivist is suddenly... closer.');
+  }
+  if(boss2.stagger<=0&&d<40){
+    const dir=new THREE.Vector3().subVectors(player.pos,boss2.pos);dir.y=0;dir.normalize();
+    boss2.pos.addScaledVector(dir,boss2.speed*dt*(d>2?1:0));
+    boss2.g.position.set(boss2.pos.x,0,boss2.pos.z);
+    boss2.g.lookAt(player.pos.x,0,player.pos.z);
+    if(d<2.6&&boss2.cd<=0){
+      boss2.cd=1.0;player.hp-=hasAmp2?8:13;updHUD();sfx('hit');
+      say('Her fingers are bookmarks. They mark where it hurts.');
+      if(player.hp<=0)gameOver();
+    }
+    if(boss2.volleyCd<=0&&d>4&&d<26){
+      boss2.volleyCd=3.8;sfx('volley');
+      const m=new THREE.Mesh(shotGeo,shotMat);
+      m.position.copy(boss2.pos);m.position.y=4.4;
+      const dir2=new THREE.Vector3().subVectors(player.pos,boss2.pos);dir2.y=0;dir2.normalize();
+      const ang=Math.atan2(dir2.x,dir2.z);
+      arcZone.add(m);
+      arcShots.push({m,vx:Math.sin(ang)*10,vz:Math.cos(ang)*10,life:3});
+    }
+  }
+  for(let i=arcShots.length-1;i>=0;i--){
+    const s=arcShots[i];
+    s.life-=dt;
+    s.m.position.x+=s.vx*dt;s.m.position.z+=s.vz*dt;
+    s.m.rotation.y+=dt*6;s.m.rotation.x+=dt*3;
+    const pd=Math.hypot(s.m.position.x-player.pos.x,s.m.position.z-player.pos.z);
+    if(pd<.7&&Math.abs(s.m.position.y-player.pos.y)<2){
+      player.hp-=8;updHUD();sfx('hit');
+      if(player.hp<=0)gameOver();
+      s.life=0;
+    }
+    if(s.life<=0){arcZone.remove(s.m);arcShots.splice(i,1);}
+  }
+  boss2.g.rotation.z=Math.sin(performance.now()*.006)*.05;
+  document.getElementById('bossfill').style.width=Math.max(0,boss2.hp/150*100)+'%';
+}
+function boss2Die(){
+  if(boss2Dead)return;
+  boss2Dead=true;boss2.hp=0;boss2.g.visible=false;sfx('die');
+  for(const s of arcShots)arcZone.remove(s.m);
+  arcShots.length=0;
+  document.getElementById('bossbar').style.display='none';
+  document.getElementById('obj').textContent='CLAIM THE SECOND AMPLIFIER (E)';
+  say('The Tall Archivist closes like a finished book. Her AMPLIFIER is quiet now.',3600);
+}
+
+// ---------- THE INVADER'S WORLD (act 3): the book that wrote back ----------
+const IX=1200;
+let boss3=null;
+const invShots=[];
+function iBox(w,h,d,mat,x,y,z){return box(w,h,d,mat,x+IX,y,z,invZone);}
+{
+  // floating floor islands over a red void - the library's nightmare of itself
+  const islands=[[0,-30,26],[0,-8,34],[0,0,20],[0,16,10],[0,30,16],[-14,8,10],[14,-8,10]]; // overlapping chain - every gap jumpable
+  for(const [ix,iz,r] of islands){
+    const fl=iBox(r,1,r,M.iron,ix,-.5,iz);addCol(fl,r,1,r);
+  }
+  // shelves hang from the void sky, upside down
+  const shelfGeo3=new THREE.BoxGeometry(2,9,10);
+  const sh3=new THREE.InstancedMesh(shelfGeo3,M.shelf,40);
+  const m4=new THREE.Matrix4();let n3=0;
+  for(let i=0;i<40;i++){
+    m4.makeRotationZ(Math.PI);
+    m4.setPosition(IX+(Math.random()-.5)*80,14+Math.random()*8,(Math.random()-.5)*80);
+    sh3.setMatrixAt(n3,m4);n3++;
+  }
+  sh3.count=n3;invZone.add(sh3);
+  // bleeding light
+  const pl=new THREE.PointLight(0xe83a5a,2.0,90);pl.position.set(IX,14,0);invZone.add(pl);
+  const pl2=new THREE.PointLight(0x8a2ae8,1.4,70);pl2.position.set(IX+20,8,-20);invZone.add(pl2);
+  // THE INVADER - the version that read YOU back
+  const invMat=new THREE.MeshStandardMaterial({color:0x2a0a14,roughness:.3,emissive:0xe83a5a,emissiveIntensity:.55});
+  const bg=new THREE.Group();
+  const bbody=new THREE.Mesh(new THREE.CapsuleGeometry(.45,2.8,4,10),invMat);bbody.position.y=2.2;bg.add(bbody);
+  const bhead=new THREE.Mesh(new THREE.SphereGeometry(.34,10,10),invMat);bhead.position.y=4.2;bg.add(bhead);
+  const halo=new THREE.Mesh(new THREE.TorusGeometry(.55,.05,8,24),new THREE.MeshBasicMaterial({color:0xe83a5a}));halo.position.y=4.2;halo.rotation.x=Math.PI/2;bg.add(halo);
+  bg.position.set(IX,0,24);invZone.add(bg);
+  boss3={g:bg,pos:new THREE.Vector3(IX,1.7,24),hp:220,speed:4.6,cd:0,stagger:0,blinkCd:3.6,volleyCd:2.8,halo};
+}
+function updBoss3(dt){
+  if(zone!=='invader'||!boss3||boss3Dead)return;
+  boss3.stagger=Math.max(0,boss3.stagger-dt);boss3.cd=Math.max(0,boss3.cd-dt);
+  boss3.blinkCd=Math.max(0,boss3.blinkCd-dt);boss3.volleyCd=Math.max(0,boss3.volleyCd-dt);
+  const enrage=boss3.hp<110;
+  const d=boss3.pos.distanceTo(player.pos);
+  if(boss3.blinkCd<=0&&d>8&&boss3.stagger<=0){
+    sfx('volley');
+    const a=Math.random()*Math.PI*2;
+    boss3.pos.set(player.pos.x+Math.cos(a)*4,1.7,player.pos.z+Math.sin(a)*4);
+    boss3.g.position.set(boss3.pos.x,0,boss3.pos.z);
+    boss3.blinkCd=enrage?2.4:3.8;
+    say('It arrives wearing your shadow.');
+  }
+  if(boss3.stagger<=0&&d<60){
+    const dir=new THREE.Vector3().subVectors(player.pos,boss3.pos);dir.y=0;dir.normalize();
+    boss3.pos.addScaledVector(dir,boss3.speed*(enrage?1.5:1)*dt*(d>2?1:0));
+    boss3.g.position.set(boss3.pos.x,0,boss3.pos.z);
+    boss3.g.lookAt(player.pos.x,0,player.pos.z);
+    if(d<2.6&&boss3.cd<=0){
+      boss3.cd=enrage?.7:1.0;player.hp-=15;updHUD();sfx('hit');
+      say('It knows how you bleed. It read that part twice.');
+      if(player.hp<=0)gameOver();
+    }
+    if(boss3.volleyCd<=0&&d>4&&d<30){
+      boss3.volleyCd=enrage?2.0:3.2;sfx('volley');
+      const spread=enrage?2:1;
+      for(let i=-spread;i<=spread;i++){
+        const m=new THREE.Mesh(shotGeo,shotMat);
+        m.position.copy(boss3.pos);m.position.y=3.6;
+        const dir2=new THREE.Vector3().subVectors(player.pos,boss3.pos);dir2.y=0;dir2.normalize();
+        const ang=Math.atan2(dir2.x,dir2.z)+i*.28;
+        invZone.add(m);
+        invShots.push({m,vx:Math.sin(ang)*11,vz:Math.cos(ang)*11,life:3});
+      }
+    }
+  }
+  for(let i=invShots.length-1;i>=0;i--){
+    const s=invShots[i];
+    s.life-=dt;
+    s.m.position.x+=s.vx*dt;s.m.position.z+=s.vz*dt;
+    s.m.rotation.y+=dt*7;s.m.rotation.x+=dt*4;
+    const pd=Math.hypot(s.m.position.x-player.pos.x,s.m.position.z-player.pos.z);
+    if(pd<.7&&Math.abs(s.m.position.y-player.pos.y)<2){
+      player.hp-=9;updHUD();sfx('hit');
+      if(player.hp<=0)gameOver();
+      s.life=0;
+    }
+    if(s.life<=0){invZone.remove(s.m);invShots.splice(i,1);}
+  }
+  boss3.halo.rotation.z+=dt*(enrage?4:1.5);
+  document.getElementById('bossfill').style.width=Math.max(0,boss3.hp/220*100)+'%';
+}
+function boss3Die(){
+  if(boss3Dead)return;
+  boss3Dead=true;boss3.hp=0;boss3.g.visible=false;sfx('die');
+  for(const s of invShots)invZone.remove(s.m);
+  invShots.length=0;
+  document.getElementById('bossbar').style.display='none';
+  document.getElementById('obj').textContent='RETURN TO THE BOOK (E)';
+  say('The Invader closes. The last mad version. The Library exhales.',4200);
+}
+
+// ---------- atmosphere particles ----------
+let dust,embers;
+{
+  const g=new THREE.BufferGeometry();const N=500;const pos=new Float32Array(N*3);
+  for(let i=0;i<N;i++){pos[i*3]=(Math.random()-.5)*110;pos[i*3+1]=Math.random()*24+1;pos[i*3+2]=(Math.random()-.5)*110;}
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  dust=new THREE.Points(g,new THREE.PointsMaterial({color:0x8ab0e0,size:.1,transparent:true,opacity:.55}));
+  libZone.add(dust);
+}
+{
+  const g=new THREE.BufferGeometry();const N=400;const pos=new Float32Array(N*3);
+  for(let i=0;i<N;i++){pos[i*3]=FX+(Math.random()-.5)*90;pos[i*3+1]=Math.random()*18;pos[i*3+2]=(Math.random()-.5)*90;}
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  embers=new THREE.Points(g,new THREE.PointsMaterial({color:0xff8a40,size:.16,transparent:true,opacity:.8}));
+  embers.visible=false;furZone.add(embers);
+}
+
+const crates=[];
+// ---------- Aleph (player) ----------
+const alephG=new THREE.Group();
+const abody=new THREE.Mesh(new THREE.CapsuleGeometry(.34,.9,4,10),M.aleph);abody.position.y=.95;alephG.add(abody);
+const ahead=new THREE.Mesh(new THREE.SphereGeometry(.24,12,12),new THREE.MeshStandardMaterial({color:0xd8c0a8}));ahead.position.y=1.78;alephG.add(ahead);
+const ahood=new THREE.Mesh(new THREE.ConeGeometry(.3,.5,8),M.aleph);ahood.position.y=1.95;alephG.add(ahood);
+const cape=new THREE.Mesh(new THREE.PlaneGeometry(.7,1.1,1,4),new THREE.MeshStandardMaterial({color:0x4a6a9a,roughness:.85,side:THREE.DoubleSide}));
+cape.position.set(0,1.15,.24);alephG.add(cape);
+const handL=new THREE.Mesh(new THREE.SphereGeometry(.09,8,8),M.amp);handL.position.set(-.42,1.0,0);alephG.add(handL);
+const handR=new THREE.Mesh(new THREE.SphereGeometry(.09,8,8),M.amp);handR.position.set(.42,1.0,0);alephG.add(handR);
+const ampAura=new THREE.PointLight(0x8a5aff,0,6);ampAura.position.y=1.4;alephG.add(ampAura);
+scene.add(alephG);
+const player={pos:new THREE.Vector3(0,1.7,6),vel:new THREE.Vector3(),hp:100,psi:100,onGround:false,r:.34,h:1.7};
+let camYaw=Math.PI,camPitch=-.25;
+let boss2Dead=false,hasAmp2=false,boss3Dead=false,ch1Shown=false,chantCd=0,introT=0,catBlessed=false,luckyPush=false,purrCd=0;
+const keys={};let playing=false,started=false,zone='library',bossDead=false,hasAmp=false;
+addEventListener('keydown',e=>{keys[e.code]=true;if(e.code==='Enter')enterPressed();if(e.code==='KeyF')psiPush();if(e.code==='KeyE')interact();});
+addEventListener('keyup',e=>keys[e.code]=false);
+addEventListener('mousemove',e=>{if(document.pointerLockElement!==canvas)return;camYaw-=e.movementX*.0024;camPitch=THREE.MathUtils.clamp(camPitch-e.movementY*.0022,-1.1,.5);});
+canvas.addEventListener('click',()=>{if(playing&&!cardOpen&&document.pointerLockElement!==canvas)canvas.requestPointerLock();});
+
+function playerBox(p){return{min:new THREE.Vector3(p.x-player.r,p.y-player.h,p.z-player.r),max:new THREE.Vector3(p.x+player.r,p.y,p.z+player.r)};}
+function movePlayer(dt){
+  const p=player;
+  if(keys.Space&&p.onGround){p.vel.y=8.2;p.onGround=false;}
+  p.vel.y-=22*dt;p.vel.y=Math.max(p.vel.y,-40);
+  return moveStep(dt,p);
+}
+function moveStep(dt,p){
+  const f=(keys.KeyW?1:0)-(keys.KeyS?1:0),s=(keys.KeyD?1:0)-(keys.KeyA?1:0);
+  const sp=(keys.ShiftLeft||keys.ShiftRight)?7.4:4.8;
+  const sin=Math.sin(camYaw),cos=Math.cos(camYaw);
+  let dx=(-sin*f+cos*s),dz=(-cos*f-sin*s);
+  const l=Math.hypot(dx,dz)||1;dx/=l;dz/=l;if(!f&&!s){dx=0;dz=0;}
+  p.vel.x=dx*sp;p.vel.z=dz*sp;
+  p.onGround=false;
+  for(const ax of['y','x','z']){
+    const d=p.vel[ax]*dt;if(!d)continue;
+    p.pos[ax]+=d;
+    if(ax==='y'&&p.pos.y-p.h<0){p.pos.y=p.h;p.vel.y=0;p.onGround=true;}
+    let pb=playerBox(p.pos);
+    for(const c of colliders){
+      const cb=c.static?c:{min:c.min,max:c.max};
+      if(overlaps(pb,cb)){
+        if(ax==='y'){if(d<0){p.pos.y=cb.max.y+p.h;p.vel.y=0;p.onGround=true;}else{p.pos.y=cb.min.y;p.vel.y=0;}}
+        else{const sign=Math.sign(d);p.pos[ax]=(sign>0?cb.min[ax]-player.r-.001:cb.max[ax]+player.r+.001);p.vel[ax]=0;}
+        pb=playerBox(p.pos);
+      }
+    }
+  }
+  if(p.pos.y<-12){ // fell into lava/void
+    if(zone!=='library'){p.hp-=25;updHUD();say(zone==='furnace'?'The furnace takes its tithe.':zone==='archive'?'The water closes over her. She surfaces gasping.':'The void gives her back. It always gives her back.');}
+    p.pos.set(zone==='furnace'?FX:zone==='archive'?AX:zone==='invader'?IX:0,4,zone==='library'?6:zone==='invader'?-30:-30);p.vel.set(0,0,0);
+    if(p.hp<=0)gameOver();
+  }
+}
+
+// ---------- psionics ----------
+function psiPush(){
+  if(!playing||player.psi<25){if(player.psi<25)say('Psionics drained.');return;}
+  player.psi-=25;updHUD();sfx('push');
+  // visible force ring
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(.6,.05,8,32),new THREE.MeshBasicMaterial({color:0xb8a8ff,transparent:true,opacity:.9}));
+  ring.position.copy(player.pos);ring.rotation.x=Math.PI/2;
+  (zone==='furnace'?furZone:zone==='archive'?arcZone:zone==='invader'?invZone:libZone).add(ring);
+  pushRings.push({m:ring,t:.5});
+  const fwd=new THREE.Vector3(-Math.sin(camYaw),0,-Math.cos(camYaw));
+  if(zone==='archive'&&boss2&&!boss2Dead){
+    const d2b=boss2.pos.distanceTo(player.pos);
+    const to2b=new THREE.Vector3().subVectors(boss2.pos,player.pos).normalize();
+    if(d2b<7&&to2b.dot(fwd)>.4){
+      const lck2=luckyPush?2:1;luckyPush=false;
+      boss2.stagger=.8;boss2.hp-=(hasAmp2?40:hasAmp?30:20)*lck2;sfx('bosshit');
+      if(lck2>1)say('The cat\'s luck rides the push. She feels it twice.');
+      boss2.pos.addScaledVector(to2b,2.4);
+      boss2.g.position.set(boss2.pos.x,0,boss2.pos.z);
+      say(boss2.hp<=0?'The Tall Archivist folds - a book closing forever.':'She blinks, and the blink is slower this time.');
+      if(boss2.hp<=0)boss2Die();
+      return;
+    }
+  }
+  if(zone==='invader'&&boss3&&!boss3Dead){
+    const d3=boss3.pos.distanceTo(player.pos);
+    const to3=new THREE.Vector3().subVectors(boss3.pos,player.pos).normalize();
+    if(d3<7&&to3.dot(fwd)>.4){
+      boss3.stagger=.7;boss3.hp-=hasAmp2?36:hasAmp?26:18;sfx('bosshit');
+      boss3.pos.addScaledVector(to3,2.2);
+      boss3.g.position.set(boss3.pos.x,0,boss3.pos.z);
+      say(boss3.hp<=0?'The Invader folds - the book that wrote back, shut.':'It staggers. It did not read THAT coming.');
+      if(boss3.hp<=0)boss3Die();
+      return;
+    }
+  }
+  if(zone==='furnace'&&boss&&!bossDead){
+    const d=boss.pos.distanceTo(player.pos);
+    const to=new THREE.Vector3().subVectors(boss.pos,player.pos).normalize();
+    if(d<7&&to.dot(fwd)>.4){
+      boss.stagger=1.1;boss.hp-=hasAmp?34:22;sfx('bosshit');
+      // KNOCKBACK - into the lava if you aim it right
+      boss.pos.addScaledVector(to,3.2);
+      boss.g.position.set(boss.pos.x,0,boss.pos.z);
+      say(boss.hp<=0?'The mad version falters - she remembers being you.':'A clean psionic hit - she reels.');
+      if(boss.hp<=0)bossDie();
+      return;
+    }
+  }
+  // launch crates in the cone
+  for(const c of crates){
+    const to2=new THREE.Vector3().subVectors(c.pos,player.pos);const d2=to2.length();
+    if(d2<6&&to2.normalize().dot(fwd)>.35){
+      c.vel.x+=fwd.x*11;c.vel.z+=fwd.z*11;c.vel.y+=3.5;
+    }
+  }
+  say('Psionic force ripples out.');
+}
+const pushRings=[];
+
+// ---------- interact ----------
+function interact(){
+  if(!playing)return;
+  if(zone==='library'){
+    // lore books - E reads the marginalia
+    for(const l of loreBooks){
+      if(Math.hypot(player.pos.x-l.x,player.pos.z-l.z)<2){
+        showCard(l.title,l.text);
+        document.getElementById('cardnext').textContent='PRESS ENTER TO CLOSE THE BOOK';
+        sfx('book');
+        return;
+      }
+    }
+    // monk blessings - the factions repay the Aleph who unmakes mad versions
+    for(const m of monks){
+      const ddx=player.pos.x-m.g.position.x,ddz=player.pos.z-m.g.position.z;
+      if(ddx*ddx+ddz*ddz<12){
+        const unlocked=m.heretic?hasAmp2:hasAmp;
+        if(m.blessed){say(m.heretic?'The heretic has given what it has.':'The choir has sung its note for you.');return;}
+        if(!unlocked){say(m.heretic?'The Furnace heretics watch, unmoved. The Deep must be quieted first.':'The choir watches, unmoved. Unmake the Furnace\'s mad version first.');return;}
+        m.blessed=true;
+        player.hp=100;player.psi=100;updHUD();sfx('pickup');
+        m.g.children[1].material=new THREE.MeshStandardMaterial({color:0xfff2c8,emissive:0xd8b46a,emissiveIntensity:.8});
+        say(m.heretic?'The heretic presses a coal into your hand. VITALITY and PSIONICS restored.':'The choir sings one perfect note. VITALITY and PSIONICS restored.',3600);
+        return;
+      }
+    }
+    for(const b of bookPads){
+      if(Math.hypot(player.pos.x-b.x,player.pos.z-b.z)<2.4){
+        if(b.sealed){say(b.name+' - the shelf resists. The final chapter is not bound yet.');return;}
+        if(b.name==='THE ARCHIVE DEPTHS'){
+          if(!hasAmp){say('THE ARCHIVE DEPTHS - the shelf resists. The Furnace amplifier opens this book.');return;}
+          zone='archive';
+          libZone.visible=false;arcZone.visible=true;
+          player.pos.set(AX,3,-36);player.vel.set(0,0,0);
+          scene.background=new THREE.Color(0x060e1e);scene.fog=new THREE.FogExp2(0x081426,0.02);
+          hemi.color.setHex(0x5a90c8);hemi.intensity=.45;sun.color.setHex(0x4a80c0);sun.intensity=.4;
+          say('THE ARCHIVE DEPTHS. The Library kept reading after the printing went wrong. Something very tall is down here.',4400);
+          ambient('library');sfx('book');
+          document.getElementById('obj').textContent='BREAK THE TALL ARCHIVIST (F = PSIONIC PUSH)';
+          document.getElementById('bosstitle').textContent='THE TALL ARCHIVIST';
+          document.getElementById('bossbar').style.display='block';
+          embers.visible=false;dust.visible=false;
+          return;
+        }
+        if(b.name==='THE INVADER\'S WORLD'){
+          if(!hasAmp2){say('THE INVADER\'S WORLD - the shelf resists. Both amplifiers must ring before this book opens.');return;}
+          zone='invader';
+          libZone.visible=false;invZone.visible=true;
+          player.pos.set(IX,3,-30);player.vel.set(0,0,0);
+          scene.background=new THREE.Color(0x14040c);scene.fog=new THREE.FogExp2(0x1c0610,0.016);
+          hemi.color.setHex(0xe88aa0);hemi.intensity=.5;sun.color.setHex(0xe84a6a);sun.intensity=.6;
+          say('THE INVADER\'S WORLD. The book that wrote back. It has been reading you since the first page.',4600);
+          ambient('furnace');sfx('book');
+          document.getElementById('obj').textContent='BREAK THE INVADER (F = PSIONIC PUSH)';
+          document.getElementById('bosstitle').textContent='THE INVADER';
+          document.getElementById('bossbar').style.display='block';
+          embers.visible=false;dust.visible=false;
+          return;
+        }
+        // enter furnace world
+        zone='furnace';
+        libZone.visible=false;furZone.visible=true;
+        player.pos.set(FX,3,-36);player.vel.set(0,0,0);
+        scene.background=new THREE.Color(0x2a1408);scene.fog=new THREE.FogExp2(0x301608,0.014);
+        hemi.color.setHex(0xffc8a0);hemi.intensity=.6;sun.color.setHex(0xff9a50);sun.intensity=.9;
+        say('THE FURNACE WORLD. The mad version is here. So is your amplifier.',4200);
+        ambient('furnace');sfx('book');
+        document.getElementById('obj').textContent='BREAK THE MAD VERSION (F = PSIONIC PUSH)';
+        document.getElementById('bosstitle').textContent='THE MAD VERSION';
+        document.getElementById('bossbar').style.display='block';
+        embers.visible=true;dust.visible=false;
+        return;
+      }
+    }
+  }else{
+    // the lucky figurine - one blessing per waking
+    if(zone==='archive'&&!catBlessed&&Math.hypot(player.pos.x-(AX+6),player.pos.z-4)<2.5){
+      catBlessed=true;luckyPush=true;
+      player.psi=100;updHUD();sfx('pickup');
+      say('A porcelain cat, mid-wave, impossibly dry. It purrs. Your psionics fill - and the next push carries its luck.',4400);
+      return;
+    }
+    if(zone==='furnace'&&bossDead&&!hasAmp&&ampPickup.position.distanceTo(player.pos)<2.4){
+      hasAmp=true;furZone.remove(ampPickup);sfx('pickup');
+      ampAura.intensity=1.4;
+      document.getElementById('obj').textContent='RETURN TO THE BOOK (E)';
+      say('PSIONIC AMPLIFIER claimed - push hits harder, psionics regenerate faster. The book waits.');
+      return;
+    }
+    if(zone==='archive'&&boss2Dead&&!hasAmp2&&amp2Pickup.position.distanceTo(player.pos)<2.4){
+      hasAmp2=true;arcZone.remove(amp2Pickup);sfx('pickup');
+      ampAura.intensity=2.2;
+      document.getElementById('obj').textContent='RETURN TO THE BOOK (E)';
+      say('SECOND AMPLIFIER claimed. The Aleph rings like a struck bell. Go home.');
+      return;
+    }
+    // return book (spawn platform, per zone)
+    const RZ=zone==='furnace'?FX:zone==='archive'?AX:IX;
+    const RZZ=zone==='invader'?-30:-36;
+    if(Math.hypot(player.pos.x-RZ,player.pos.z-RZZ)<3){
+      const wasArchive=zone==='archive';
+      const wasInvader=zone==='invader';
+      zone='library';
+      furZone.visible=false;arcZone.visible=false;invZone.visible=false;libZone.visible=true;
+      player.pos.set(-14,3,-10);player.vel.set(0,0,0);
+      scene.background=new THREE.Color(0x0a1424);scene.fog=new THREE.FogExp2(0x0c1830,0.011);
+      hemi.color.setHex(0x8ab0e0);hemi.intensity=.7;sun.color.setHex(0xaac8f0);sun.intensity=.8;
+      ambient('library');sfx('book');
+      document.getElementById('bossbar').style.display='none';
+      document.getElementById('obj').textContent=boss3Dead?'PROSPERO COMPLETE':(hasAmp2?'READ THE INVADER\'S WORLD BOOK (E)':(hasAmp?'READ THE ARCHIVE DEPTHS BOOK (E)':'READ THE FURNACE BOOK (E)'));
+      embers.visible=false;dust.visible=true;
+      if(wasInvader&&boss3Dead){
+        playing=false;sfx('win');
+        showCard('PROSPERO COMPLETE - THE LIBRARIAN REMEMBERS','Three mad versions unmade. The Furnace quiet. The Depths dry. The book that wrote back is shut, and the last page is blank - hers to write.\n\nSomewhere above the stacks, the choir and the heretics stop fighting. The Librarian remembers building this place. She remembers why.\n\nThe root of Valve - psionics, world-books, the woman in the stacks - walks again. Gabe said in 2006 he wanted to resume Prospero. Consider it resumed.');
+        document.getElementById('cardnext').textContent='THANK YOU FOR PLAYING - REFRESH TO WAKE THE ALEPH AGAIN';
+      }else if(wasArchive&&boss2Dead&&hasAmp2){
+        playing=false;sfx('win');
+        showCard('CHAPTER TWO COMPLETE - THE DEPTHS REMEMBER','Two mad versions unmade. Two amplifiers on the Aleph\'s hip. The Archive Depths keep their water, and their silence.\n\nOne shelf is still dark: THE INVADER\'S WORLD. The book that wrote back. It stays sealed for the final chapter.\n\nGabe said in 2006 he wanted to resume Prospero. Resumed.');
+        document.getElementById('cardnext').textContent='REFRESH TO WAKE THE ALEPH AGAIN';
+      }else if(!wasArchive&&bossDead&&hasAmp&&!ch1Shown){
+        sfx('win');
+        ch1Shown=true;
+        showCard('CHAPTER ONE COMPLETE - THE LIBRARY STIRS','One mad version unmade. One amplifier recovered. Somewhere above, the shelves relight.\n\nThe Archive Depths are open now - the blue book, second shelf. The Invader\'s World stays sealed for the final chapter.\n\nKeep going, Aleph.');
+        document.getElementById('cardnext').textContent='PRESS ENTER TO CONTINUE';
+      }else say('The Library hums. The books are not finished with you.');
+      return;
+    }
+    say('Nothing here answers your hand.');
+  }
+}
+
+// ---------- boss AI ----------
+const bossShots=[];
+const shotGeo=new THREE.PlaneGeometry(.5,.7);
+const shotMat=new THREE.MeshStandardMaterial({color:0xffd0d8,emissive:0xd84a6a,emissiveIntensity:.8,side:THREE.DoubleSide});
+function bossVolley(){
+  sfx('volley');
+  for(let i=-1;i<=1;i++){
+    const m=new THREE.Mesh(shotGeo,shotMat);
+    m.position.copy(boss.pos);m.position.y=3.2;
+    const dir=new THREE.Vector3().subVectors(player.pos,boss.pos);dir.y=0;dir.normalize();
+    const ang=Math.atan2(dir.x,dir.z)+i*.28;
+    furZone.add(m);
+    bossShots.push({m,vx:Math.sin(ang)*9,vz:Math.cos(ang)*9,life:3});
+  }
+}
+function inLava(x,z){
+  if(x>FX-16&&x<FX-8&&z>-35&&z<35)return true;
+  if(z>16&&z<24&&x>FX-30&&x<FX+40)return true;
+  return false;
+}
+function updBoss(dt){
+  if(zone!=='furnace'||!boss||bossDead)return;
+  boss.stagger=Math.max(0,boss.stagger-dt);boss.cd=Math.max(0,boss.cd-dt);
+  boss.volleyCd=Math.max(0,(boss.volleyCd||0)-dt);
+  const d=boss.pos.distanceTo(player.pos);
+  // lava hurts HER too - knock her in, it is the smart kill
+  if(inLava(boss.pos.x,boss.pos.z)){
+    boss.hp-=26*dt;boss.stagger=Math.max(boss.stagger,.2);
+    if(!updBoss._lavaSaid||performance.now()-updBoss._lavaSaid>3000){say('The furnace bites the mad version. PUSH HER BACK IN.');updBoss._lavaSaid=performance.now();sfx('bosshit');}
+    if(boss.hp<=0){bossDie();return;}
+  }
+  // slam telegraph (close range, mid-hp onward)
+  if(boss.slam>0){
+    boss.slam-=dt;
+    boss.g.scale.setScalar(1+Math.sin(performance.now()*.03)*.15);
+    if(boss.slam<=0){
+      boss.g.scale.set(1,1,1);
+      sfx('slam');
+      if(d<4.6){player.hp-=hasAmp?16:24;updHUD();say('The slam catches you.');if(player.hp<=0)gameOver();}
+      else say('Her slam craters the deck where you stood.');
+    }
+  }else if(boss.stagger<=0&&d<40){
+    const dir=new THREE.Vector3().subVectors(player.pos,boss.pos);dir.y=0;dir.normalize();
+    const spd=boss.speed*(boss.hp<60?1.5:1);
+    boss.pos.addScaledVector(dir,spd*dt*(d>2?1:0));
+    boss.g.position.set(boss.pos.x,0,boss.pos.z);
+    boss.g.lookAt(player.pos.x,0,player.pos.z);
+    if(d<2.6&&boss.cd<=0){
+      if(boss.hp<110){boss.slam=.85;say('She rears back - MOVE.');}
+      else{
+        boss.cd=1.1;player.hp-=hasAmp?9:14;updHUD();sfx('hit');
+        say('The mad version strikes - she has your reach but not your mercy.');
+        if(player.hp<=0)gameOver();
+      }
+    }
+    if(boss.hp<120&&boss.volleyCd<=0&&d>5&&d<28){boss.volleyCd=3.4;bossVolley();}
+  }
+  // volley projectiles
+  for(let i=bossShots.length-1;i>=0;i--){
+    const s=bossShots[i];
+    s.life-=dt;
+    s.m.position.x+=s.vx*dt;s.m.position.z+=s.vz*dt;
+    s.m.rotation.y+=dt*6;s.m.rotation.x+=dt*3;
+    const pd=Math.hypot(s.m.position.x-player.pos.x,s.m.position.z-player.pos.z);
+    if(pd<.7&&Math.abs(s.m.position.y-player.pos.y)<2){
+      player.hp-=8;updHUD();sfx('hit');
+      if(player.hp<=0)gameOver();
+      s.life=0;
+    }
+    if(s.life<=0){furZone.remove(s.m);bossShots.splice(i,1);}
+  }
+  // idle distortion shiver
+  if(!(boss.slam>0))boss.g.scale.x=1+Math.sin(performance.now()*.008)*.06;
+  document.getElementById('bossfill').style.width=Math.max(0,boss.hp/160*100)+'%';
+}
+function bossDie(){
+  if(bossDead)return;
+  bossDead=true;boss.hp=0;boss.g.visible=false;sfx('die');
+  for(const s of bossShots)furZone.remove(s.m);
+  bossShots.length=0;
+  document.getElementById('bossbar').style.display='none';
+  document.getElementById('obj').textContent='CLAIM THE AMPLIFIER (E)';
+  say('The tall copy collapses into pages. The AMPLIFIER is yours to claim.',3600);
+}
+
+// ---------- flow / hud ----------
+const cardEl=document.getElementById('card');let cardOpen=false;
+function showCard(t,x){document.getElementById('cardtitle').textContent=t;document.getElementById('cardtext').textContent=x;cardEl.style.display='flex';cardOpen=true;if(document.exitPointerLock)document.exitPointerLock();}
+function hideCard(){cardEl.style.display='none';cardOpen=false;}
+function say(t,ms){const m=document.getElementById('msg');m.textContent=t;m.style.display='block';clearTimeout(say._t);say._t=setTimeout(()=>m.style.display='none',ms||2800);}
+function updHUD(){
+  document.getElementById('hp').textContent='VITALITY '+Math.max(0,Math.round(player.hp));
+  document.getElementById('psi').textContent='PSIONICS '+Math.round(player.psi);
+}
+function enterPressed(){audioInit();if(cardOpen){hideCard();if(!SHOT)canvas.requestPointerLock();return;}if(!started)startGame();}
+function startGame(){
+  started=true;playing=true;
+  document.getElementById('title').style.display='none';
+  for(const id of['hp','psi'])document.getElementById(id).style.display='block';
+  scene.background=new THREE.Color(0x0a1424);scene.fog=new THREE.FogExp2(0x0c1830,0.011);
+  updHUD();
+  say('Three books. One opens. The monks watch. E reads, F pushes, the rest is remembering.',4600);
+  ambient('library');
+  introT=SHOT?0:4.5; // scripted descent into the stacks
+  if(!SHOT)canvas.requestPointerLock();
+}
+function gameOver(){
+  playing=false;sfx('die');
+  showCard('THE ALEPH SLEEPS AGAIN','The Library prints another copy. She will be taller. She will be madder. You will be back.\n\nREFRESH TO WAKE AGAIN');
+}
+
+// ---------- gamepad ----------
+let padJump=false,padPush=false,padUse=false,padEnter=false,padRun=false;
+function pollPad(){
+  const gp=navigator.getGamepads&&navigator.getGamepads()[0];
+  if(!gp)return;
+  const dz=v=>Math.abs(v)>.18?v:0;
+  const lx=dz(gp.axes[0]||0),ly=dz(gp.axes[1]||0),rx=dz(gp.axes[2]||0),ry=dz(gp.axes[3]||0);
+  keys.KeyW=ly<-.3;keys.KeyS=ly>.3;keys.KeyA=lx<-.3;keys.KeyD=lx>.3;
+  camYaw-=rx*.045;camPitch=THREE.MathUtils.clamp(camPitch-ry*.035,-1.1,.5);
+  const b=i=>gp.buttons[i]&&gp.buttons[i].pressed;
+  if(b(0)&&!padJump){keys.Space=true;padJump=true;}else if(!b(0)){keys.Space=false;padJump=false;}
+  if(b(2)&&!padPush){psiPush();padPush=true;}else if(!b(2))padPush=false;
+  if(b(3)&&!padUse){interact();padUse=true;}else if(!b(3))padUse=false;
+  if(b(9)&&!padEnter){enterPressed();padEnter=true;}else if(!b(9))padEnter=false;
+  if(b(1)){keys.ShiftLeft=true;padRun=true;}else if(padRun){keys.ShiftLeft=false;padRun=false;}
+}
+
+// ---------- main loop ----------
+const clock=new THREE.Clock();
+function tick(){
+  requestAnimationFrame(tick);
+  const dt=Math.min(clock.getDelta(),.05);
+  pollPad();
+  if(playing&&!cardOpen){
+    if(introT<=0)movePlayer(dt);
+    player.psi=Math.min(100,player.psi+(hasAmp?15:8)*dt);
+    updBoss(dt);
+    updBoss2(dt);
+    updBoss3(dt);
+    for(const g of gears)g.rotation.x+=dt*.5;
+    for(const m of monks){
+      m.ph+=dt;m.g.position.y=2.8+Math.sin(m.ph)*.8;
+      const mdx=player.pos.x-m.g.position.x,mdz=player.pos.z-m.g.position.z;
+      if(zone==='library'&&mdx*mdx+mdz*mdz<400)m.g.rotation.y=Math.atan2(mdx,mdz); // they turn to watch her
+      else m.g.rotation.y+=dt*.3;
+    }
+    // the lucky figurine purrs when she is near (Archive Depths)
+    if(zone==='archive'&&!cardOpen){
+      const cdx2=player.pos.x-(AX+6),cdz2=player.pos.z-4;
+      const cd2=Math.hypot(cdx2,cdz2);
+      purrCd=Math.max(0,purrCd-dt);
+      if(cd2<9&&purrCd<=0){
+        const vol=.09*(1-cd2/9);
+        tone(52,.34,'sine',vol,38);tone(78,.22,'sine',vol*.6,58);
+        purrCd=.5;
+      }
+      const lc=window.__luckyCat;
+      if(lc){lc.paw.rotation.z=-.5+Math.sin(performance.now()*.003)*.25;lc.light.intensity=catBlessed?.35:.9+Math.sin(performance.now()*.002)*.25;}
+    }
+    // proximity chant
+    chantCd=Math.max(0,chantCd-dt);
+    if(zone==='library'&&chantCd<=0){
+      for(const m of monks){
+        const cdx=player.pos.x-m.g.position.x,cdz=player.pos.z-m.g.position.z;
+        if(cdx*cdx+cdz*cdz<36){tone(m.heretic?78:96,2.5,'sine',.028);tone(m.heretic?117:144,2.5,'sine',.018);chantCd=8;break;}
+      }
+    }
+    if(ampPickup&&!hasAmp)ampPickup.rotation.y+=dt*2;
+    for(const l of loreBooks){l.ph+=dt;l.mesh.position.y=1.15+Math.sin(l.ph)*.08;l.mesh.rotation.y+=dt*.8;}
+    // physics crates
+    for(const c of crates){
+      c.vel.y-=20*dt;
+      c.pos.addScaledVector(c.vel,dt);
+      if(c.pos.y<c.half){c.pos.y=c.half;c.vel.y=0;c.vel.x*=.86;c.vel.z*=.86;}
+      if(c.pos.x<FX-43||c.pos.x>FX+43){c.vel.x*=-.5;c.pos.x=THREE.MathUtils.clamp(c.pos.x,FX-43,FX+43);}
+      if(c.pos.z<-43||c.pos.z>43){c.vel.z*=-.5;c.pos.z=THREE.MathUtils.clamp(c.pos.z,-43,43);}
+      if(inLava(c.pos.x,c.pos.z)&&c.pos.y<1){c.vel.set(0,4,0);c.pos.y=1.2;} // lava spits crates back
+      c.mesh.position.copy(c.pos);
+      c.mesh.rotation.x+=c.vel.z*dt*.4;c.mesh.rotation.z-=c.vel.x*dt*.4;
+      // player/crate collision
+      const pcdx=player.pos.x-c.pos.x,pcdz=player.pos.z-c.pos.z;
+      const pcd=Math.hypot(pcdx,pcdz);
+      if(pcd<1.2&&pcd>0.001&&Math.abs(player.pos.y-c.pos.y)<1.5){
+        player.pos.x+=pcdx/pcd*(1.2-pcd);player.pos.z+=pcdz/pcd*(1.2-pcd);
+      }
+      // weaponized: a fast crate hurts the mad version
+      if(zone==='furnace'&&boss&&!bossDead){
+        const spd=Math.hypot(c.vel.x,c.vel.z);
+        if(spd>4&&c.pos.distanceTo(boss.pos)<1.4){
+          boss.hp-=18;boss.stagger=Math.max(boss.stagger,.7);sfx('bosshit');
+          c.vel.multiplyScalar(-.3);
+          say('Crate to the teeth - improvised and effective.');
+          if(boss.hp<=0)bossDie();
+        }
+      }
+    }
+    // push rings expand+fade
+    for(let i=pushRings.length-1;i>=0;i--){
+      const r=pushRings[i];r.t-=dt;
+      r.m.scale.setScalar(1+(0.5-r.t)*10);
+      r.m.material.opacity=Math.max(0,r.t*1.8);
+      if(r.t<=0){r.m.parent.remove(r.m);pushRings.splice(i,1);}
+    }
+    // particles drift
+    if(zone==='library'&&dust){const p=dust.geometry.attributes.position;for(let i=0;i<p.count;i++){let y=p.getY(i)-dt*.5;if(y<0)y=24;p.setY(i,y);}p.needsUpdate=true;}
+    if(zone==='furnace'&&embers){const p=embers.geometry.attributes.position;for(let i=0;i<p.count;i++){let y=p.getY(i)+dt*1.6;if(y>18)y=0;p.setY(i,y);}p.needsUpdate=true;}
+    // aleph life: bob while moving, cape sway, psi-charged hands
+    const moving=Math.abs(player.vel.x)+Math.abs(player.vel.z)>.5;
+    const t=performance.now()*.008;
+    abody.scale.y=1+(moving?Math.sin(t*2)*.04:Math.sin(t*.5)*.02);
+    cape.rotation.x=.25+(moving?Math.sin(t*2)*.22:Math.sin(t*.6)*.08);
+    const glowS=.8+(player.psi/100)*1.1;
+    handL.scale.setScalar(glowS);handR.scale.setScalar(glowS);
+    updHUD();
+  }
+  // third-person orbit camera with collision pull-in
+  alephG.position.copy(player.pos);
+  alephG.rotation.y=camYaw+Math.PI;
+  let cd=4.6;
+  const hx=player.pos.x,hy=player.pos.y+.4,hz=player.pos.z;
+  const dirx=Math.sin(camYaw)*Math.cos(camPitch),diry=Math.sin(-camPitch),dirz=Math.cos(camYaw)*Math.cos(camPitch);
+  for(let s=2;s<=10;s++){
+    const t=cd*s/10;
+    const px=hx+dirx*t,py=hy+1+diry*t,pz=hz+dirz*t;
+    let blocked=false;
+    for(const c of colliders){
+      const cb=c.static?c:{min:c.min,max:c.max};
+      if(px>cb.min.x-.2&&px<cb.max.x+.2&&py>cb.min.y-.2&&py<cb.max.y+.2&&pz>cb.min.z-.2&&pz<cb.max.z+.2){blocked=true;break;}
+    }
+    if(blocked){cd=Math.max(1.2,t-.6);break;}
+  }
+  if(introT>0){
+    introT-=dt;
+    const k=THREE.MathUtils.clamp(1-introT/4.5,0,1),e=k*k*(3-2*k);
+    const fx=hx+dirx*cd,fy=hy+1+diry*cd,fz=hz+dirz*cd;
+    camera.position.set(0+(fx-0)*e,70+(fy-70)*e,90+(fz-90)*e);
+    camera.lookAt(hx*e,hy*e+20*(1-e),hz*e);
+  }else{
+    camera.position.set(hx+dirx*cd,hy+1+diry*cd,hz+dirz*cd);
+    camera.lookAt(hx,hy,hz);
+  }
+  renderer.render(scene,camera);
+}
+tick();
+if(SHOT){startGame();}
+</script>
+</body>
+</html>
